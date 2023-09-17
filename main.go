@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -14,56 +13,79 @@ import (
 	_ "github.com/olebedev/when/rules/ru"
 )
 
-const (
-	markName  = "GOLANG_CLI_REMINDER"
-	markValue = "1"
-)
-
 func main() {
-	if len(os.Args) < 4 {
+	if len(os.Args) < 3 {
 		fmt.Printf("Usage: %s <hh:mm> <text message>\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	now := time.Now()
-
-	w := when.New(nil)
-	w.Add(en.All...)
-	w.Add(common.All...)
-
-	t, err := w.Parse(os.Args[1], now)
+	reminderTime, err := parseReminderTime(os.Args[1])
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(2)
+		handleError(err, 2)
+	}
+
+	if reminderTime.Before(time.Now()) {
+		handleError(fmt.Errorf("reminder time is in the past"), 4)
+	}
+
+	message := strings.Join(os.Args[2:], " ")
+
+	timeDifference := reminderTime.Sub(time.Now())
+	showCountdown("Reminder will be shown in", timeDifference)
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			timeDifference = reminderTime.Sub(time.Now())
+			if timeDifference <= 0 {
+				showReminder("Reminder", message)
+				return
+			}
+			showCountdown("Reminder will be shown in", timeDifference)
+		}
+	}
+}
+
+func parseReminderTime(timeStr string) (time.Time, error) {
+	currentTime := time.Now()
+	parser := when.New(nil)
+	parser.Add(en.All...)
+	parser.Add(common.All...)
+
+	t, err := parser.Parse(timeStr, currentTime)
+	if err != nil {
+		return time.Time{}, err
 	}
 
 	if t == nil {
-		fmt.Println("No reminder time found")
-		os.Exit(3)
+		return time.Time{}, fmt.Errorf("no reminder time found")
 	}
 
-	if t.Time.Before(now) {
-		fmt.Println("Reminder time is in the past")
-		os.Exit(4)
-	}
+	return t.Time, nil
+}
 
-	difference := t.Time.Sub(now)
-	if os.Getenv(markName) == markValue {
-		time.Sleep(difference)
-		err := beeep.Alert("Reminder", strings.Join(os.Args[2:], ""), "assets/information.png")
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(5)
-		}
-	} else {
-		cmd := exec.Command(os.Args[0], os.Args[1:]...)
-		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", markName, markValue))
-		err := cmd.Start()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(6)
-		}
+func handleError(err error, exitCode int) {
+	fmt.Println(err)
+	os.Exit(exitCode)
+}
 
-		fmt.Println("Reminder will be shown in", difference.Round(time.Second))
+func showReminder(title, message string) {
+	err := beeep.Alert(title, message, "assets/information.png")
+	if err != nil {
+		handleError(err, 5)
 	}
+}
+
+func showCountdown(message string, duration time.Duration) {
+	fmt.Printf("%s %s\n", message, formatDuration(duration))
+}
+
+func formatDuration(duration time.Duration) string {
+	hours := int(duration.Hours())
+	minutes := int(duration.Minutes()) % 60
+	seconds := int(duration.Seconds()) % 60
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 }
